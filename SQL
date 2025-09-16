@@ -1,52 +1,38 @@
-DECLARE @SearchValue NVARCHAR(MAX) = 'A317010179';  -- 👈 The value you're searching for
-DECLARE @TableName NVARCHAR(MAX), @ColumnName NVARCHAR(MAX), @DataType NVARCHAR(128);
-DECLARE @SQL NVARCHAR(MAX);
-DECLARE @Matches TABLE (TableName NVARCHAR(MAX), ColumnName NVARCHAR(MAX));
-
--- Limit to 4 tables
-DECLARE column_cursor CURSOR FOR
-SELECT 
-    t.name AS TableName, 
-    c.name AS ColumnName,
-    ty.name AS DataType
-FROM (
-    SELECT TOP 4 * FROM sys.tables ORDER BY name  -- 👈 LIMIT TO 4 TABLES
-) t
-JOIN sys.columns c ON t.object_id = c.object_id
-JOIN sys.types ty ON c.user_type_id = ty.user_type_id
-WHERE ty.name IN (
-    'char', 'nchar', 'varchar', 'nvarchar', 
-    'text', 'ntext',
-    'uniqueidentifier', 'int', 'bigint', 'decimal', 
-    'numeric', 'float', 'real', 'smallint', 'tinyint'
-)
-ORDER BY t.name, c.name;
-
-OPEN column_cursor;
-
-FETCH NEXT FROM column_cursor INTO @TableName, @ColumnName, @DataType;
-
-WHILE @@FETCH_STATUS = 0
+SET SERVEROUTPUT ON
+DECLARE
+    v_search_value   VARCHAR2(100) := 'A317010179';
+    v_sql            VARCHAR2(1000);
+    v_found          NUMBER;
 BEGIN
-    SET @SQL = '
-    IF EXISTS (
-        SELECT 1 FROM [' + @TableName + '] 
-        WHERE TRY_CAST([' + @ColumnName + '] AS NVARCHAR(MAX)) LIKE ''%' + @SearchValue + '%''
+    FOR col_rec IN (
+        SELECT table_name, column_name
+        FROM (
+            SELECT DISTINCT table_name
+            FROM all_tab_columns
+            WHERE owner = USER
+            ORDER BY table_name
+        )
+        WHERE ROWNUM <= 4
+        AND table_name IN (
+            SELECT table_name FROM all_tab_columns WHERE data_type IN ('VARCHAR2', 'CHAR', 'NUMBER')
+        )
+        AND column_name IN (
+            SELECT column_name FROM all_tab_columns WHERE data_type IN ('VARCHAR2', 'CHAR', 'NUMBER')
+        )
     )
-    INSERT INTO @Matches (TableName, ColumnName) VALUES (''' + @TableName + ''', ''' + @ColumnName + ''')';
-
-    BEGIN TRY
-        EXEC sp_executesql @SQL;
-    END TRY
-    BEGIN CATCH
-        -- Ignore errors like conversion issues
-    END CATCH;
-
-    FETCH NEXT FROM column_cursor INTO @TableName, @ColumnName, @DataType;
-END
-
-CLOSE column_cursor;
-DEALLOCATE column_cursor;
-
--- Show results
-SELECT * FROM @Matches;
+    LOOP
+        BEGIN
+            v_sql := 'SELECT COUNT(*) FROM "' || col_rec.table_name || '" WHERE TO_CHAR("' || col_rec.column_name || '") LIKE :1';
+            EXECUTE IMMEDIATE v_sql INTO v_found USING '%' || v_search_value || '%';
+            
+            IF v_found > 0 THEN
+                DBMS_OUTPUT.PUT_LINE('Found in ' || col_rec.table_name || '.' || col_rec.column_name);
+            END IF;
+        EXCEPTION
+            WHEN OTHERS THEN
+                -- Skip columns that can't be searched or cast
+                NULL;
+        END;
+    END LOOP;
+END;
+/
