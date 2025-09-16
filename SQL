@@ -1,0 +1,52 @@
+DECLARE @SearchValue NVARCHAR(MAX) = 'A317010179';  -- 👈 The value you're searching for
+DECLARE @TableName NVARCHAR(MAX), @ColumnName NVARCHAR(MAX), @DataType NVARCHAR(128);
+DECLARE @SQL NVARCHAR(MAX);
+DECLARE @Matches TABLE (TableName NVARCHAR(MAX), ColumnName NVARCHAR(MAX));
+
+-- Limit to 4 tables
+DECLARE column_cursor CURSOR FOR
+SELECT 
+    t.name AS TableName, 
+    c.name AS ColumnName,
+    ty.name AS DataType
+FROM (
+    SELECT TOP 4 * FROM sys.tables ORDER BY name  -- 👈 LIMIT TO 4 TABLES
+) t
+JOIN sys.columns c ON t.object_id = c.object_id
+JOIN sys.types ty ON c.user_type_id = ty.user_type_id
+WHERE ty.name IN (
+    'char', 'nchar', 'varchar', 'nvarchar', 
+    'text', 'ntext',
+    'uniqueidentifier', 'int', 'bigint', 'decimal', 
+    'numeric', 'float', 'real', 'smallint', 'tinyint'
+)
+ORDER BY t.name, c.name;
+
+OPEN column_cursor;
+
+FETCH NEXT FROM column_cursor INTO @TableName, @ColumnName, @DataType;
+
+WHILE @@FETCH_STATUS = 0
+BEGIN
+    SET @SQL = '
+    IF EXISTS (
+        SELECT 1 FROM [' + @TableName + '] 
+        WHERE TRY_CAST([' + @ColumnName + '] AS NVARCHAR(MAX)) LIKE ''%' + @SearchValue + '%''
+    )
+    INSERT INTO @Matches (TableName, ColumnName) VALUES (''' + @TableName + ''', ''' + @ColumnName + ''')';
+
+    BEGIN TRY
+        EXEC sp_executesql @SQL;
+    END TRY
+    BEGIN CATCH
+        -- Ignore errors like conversion issues
+    END CATCH;
+
+    FETCH NEXT FROM column_cursor INTO @TableName, @ColumnName, @DataType;
+END
+
+CLOSE column_cursor;
+DEALLOCATE column_cursor;
+
+-- Show results
+SELECT * FROM @Matches;
